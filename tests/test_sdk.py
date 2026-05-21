@@ -8,6 +8,7 @@ from claude_p.cli import (
     is_terminal_assistant_message,
     read_persisted_assistant,
     recover_prompt_from_variadic_args,
+    timeout_expired,
 )
 
 
@@ -46,6 +47,16 @@ def test_workspace_trust_quick_safety_is_detected():
 
 def test_successful_assistant_text_is_not_failure():
     assert classify_failure("normal transcript", "CLAUDE_P_OK", timed_out=False) is None
+
+
+def test_timeout_expired_disabled_with_zero_or_negative_values():
+    assert not timeout_expired(start=100.0, timeout_sec=0, now=10000.0)
+    assert not timeout_expired(start=100.0, timeout_sec=-1, now=10000.0)
+
+
+def test_timeout_expired_for_positive_values():
+    assert not timeout_expired(start=100.0, timeout_sec=90, now=189.9)
+    assert timeout_expired(start=100.0, timeout_sec=90, now=190.0)
 
 
 def test_tool_use_assistant_message_is_not_terminal():

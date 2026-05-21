@@ -171,6 +171,19 @@ def classify_failure(transcript: str, assistant_text: str, timed_out: bool) -> s
     return "assistant_output_not_found"
 
 
+def timeout_expired(start: float, timeout_sec: float, now: float | None = None) -> bool:
+    """Return whether the wrapper timeout expired.
+
+    timeout_sec <= 0 disables the wrapper timeout. Claude Code can still exit
+    on its own, and callers can still enforce process-level timeouts outside
+    this wrapper.
+    """
+    if timeout_sec <= 0:
+        return False
+    current = time.time() if now is None else now
+    return current - start >= timeout_sec
+
+
 def classify_interactive_block(text: str) -> str | None:
     low = clean_terminal(text).lower()
     compact = compact_for_detection(text)
@@ -372,8 +385,10 @@ def run_tui(args: argparse.Namespace, stream_json: bool) -> tuple[str, str, int 
     timed_out = True
 
     try:
-        while time.time() - start < args.timeout_sec:
+        while True:
             now = time.time()
+            if timeout_expired(start, args.timeout_sec, now):
+                break
             ready, _, _ = select.select([master], [], [], 0.2)
             if ready:
                 try:
@@ -566,7 +581,12 @@ def main() -> int:
     parser.add_argument("-w", "--worktree", nargs="?", const="")
 
     # Wrapper-only controls.
-    parser.add_argument("--timeout-sec", type=float, default=90)
+    parser.add_argument(
+        "--timeout-sec",
+        type=float,
+        default=90,
+        help="Wrapper timeout in seconds. Set to 0 to disable the wrapper timeout.",
+    )
     parser.add_argument("--quiet-after-sec", type=float, default=3)
     parser.add_argument("--session-id", default=str(uuid.uuid4()))
     parser.add_argument("--term", default="xterm-256color")

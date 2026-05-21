@@ -102,6 +102,13 @@ prompts, auth problems, rate limits, MCP startup failures, or other local blocks
   `--append-system-prompt`, `--mcp-config`, `--settings`, `--plugin-dir`,
   `--allowedTools`, `--disallowedTools`, `--resume`, and `--continue`
 
+`--timeout-sec` controls only the `claude-p` wrapper wait time. Set it to `0`
+to disable the wrapper timeout for long-running prompts:
+
+```bash
+claude-p "Run a long local task and summarize the result" --timeout-sec 0
+```
+
 ## Python SDK
 
 The API is intentionally shaped like the official Claude Agent SDK.
@@ -420,6 +427,13 @@ MCP 启动失败或其他本地阻塞。不要只看表层“没输出”。
 - 常见上下文和配置参数，例如 `--system-prompt`、`--append-system-prompt`、
   `--mcp-config`、`--settings`、`--plugin-dir`、`--allowedTools`、
   `--disallowedTools`、`--resume`、`--continue`
+
+`--timeout-sec` 只控制 `claude-p` wrapper 自己等待多久。把它设为 `0` 可以关闭
+wrapper timeout，适合长时间运行的 prompt：
+
+```bash
+claude-p "Run a long local task and summarize the result" --timeout-sec 0
+```
 
 ### Python SDK
 
