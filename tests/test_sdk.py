@@ -3,8 +3,10 @@ import json
 
 from claude_p import ClaudePOptions
 from claude_p.cli import (
+    ASSISTANT_MARKERS,
     build_tui_env,
     classify_failure,
+    extract_assistant_snapshot,
     is_terminal_assistant_message,
     read_persisted_assistant,
     recover_prompt_from_variadic_args,
@@ -110,3 +112,32 @@ def test_subscription_backend_strips_provider_env(monkeypatch):
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert "ANTHROPIC_BASE_URL" not in env
     assert env["NO_COLOR"] == "1"
+
+
+def test_assistant_markers_includes_both_legacy_and_current():
+    assert "⏺" in ASSISTANT_MARKERS  # U+23FA (legacy claude < 2.1)
+    assert "●" in ASSISTANT_MARKERS  # U+25CF (claude 2.1+)
+
+
+def test_extract_assistant_snapshot_legacy_marker():
+    transcript = "❯ ping\n⏺ pong\n"
+    assert extract_assistant_snapshot(transcript) == "pong"
+
+
+def test_extract_assistant_snapshot_current_marker():
+    transcript = "❯ ping\n● pong\n"
+    assert extract_assistant_snapshot(transcript) == "pong"
+
+
+def test_extract_assistant_snapshot_prefers_latest_marker_across_variants():
+    # If both markers appear, use the right-most one regardless of variant —
+    # that's the most recent assistant turn in the transcript.
+    transcript = "⏺ old answer\n❯ new prompt\n● new answer\n"
+    assert extract_assistant_snapshot(transcript) == "new answer"
+
+    transcript_reversed = "● old answer\n❯ new prompt\n⏺ new answer\n"
+    assert extract_assistant_snapshot(transcript_reversed) == "new answer"
+
+
+def test_extract_assistant_snapshot_returns_empty_when_no_marker():
+    assert extract_assistant_snapshot("just some text without any marker") == ""

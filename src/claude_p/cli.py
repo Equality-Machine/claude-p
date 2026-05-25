@@ -151,12 +151,28 @@ def normalize_answer(text: str) -> str:
     return text.strip()
 
 
+# Assistant-message markers used by the interactive `claude` TUI.
+# Pre-2.1 builds rendered the leading bullet as U+23FA ("⏺"); 2.1+
+# builds emit U+25CF ("●"). Support both so the wrapper keeps
+# working across claude CLI versions without a follow-up patch.
+ASSISTANT_MARKERS = ("⏺", "●")
+
+
 def extract_assistant_snapshot(transcript: str) -> str:
     clean = clean_terminal(transcript)
-    marker = clean.rfind("⏺")
-    if marker < 0:
+
+    best_pos = -1
+    best_marker = ""
+    for marker in ASSISTANT_MARKERS:
+        pos = clean.rfind(marker)
+        if pos > best_pos:
+            best_pos = pos
+            best_marker = marker
+
+    if best_pos < 0:
         return ""
-    after = clean[marker + len("⏺") :]
+
+    after = clean[best_pos + len(best_marker) :]
     return normalize_answer(after)
 
 
