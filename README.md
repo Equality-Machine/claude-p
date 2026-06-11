@@ -98,6 +98,8 @@ prompts, auth problems, rate limits, MCP startup failures, or other local blocks
 - `--include-partial-messages`
 - `--session-id`
 - `--cwd`
+- `--safe-mode`
+- `--no-auto-trust` to disable wrapper auto-confirmation of the workspace trust prompt
 - common context/config flags such as `--system-prompt`,
   `--append-system-prompt`, `--mcp-config`, `--settings`, `--plugin-dir`,
   `--allowedTools`, `--disallowedTools`, `--resume`, and `--continue`
@@ -174,6 +176,10 @@ text.
 - JSON single-result output.
 - Core `stream-json` event shape.
 - Tool use through the interactive Claude Code session.
+- In headless runs, the wrapper auto-confirms Claude Code's standard workspace
+  trust prompt, matching `claude -p`'s non-interactive behavior. `--safe-mode` is
+  forwarded to Claude Code separately; pass `--no-auto-trust` to disable wrapper
+  auto-confirmation. Only run headless prompts in directories you trust.
 - Python SDK with `query(...)` and `ClaudePClient(...).run(...)`.
 - Global console command after `uv tool install claude-p` or `python -m pip install claude-p`.
 
@@ -424,6 +430,8 @@ MCP 启动失败或其他本地阻塞。不要只看表层“没输出”。
 - `--include-partial-messages`
 - `--session-id`
 - `--cwd`
+- `--safe-mode`
+- `--no-auto-trust` 用来禁用 wrapper 自动确认 workspace trust 提示
 - 常见上下文和配置参数，例如 `--system-prompt`、`--append-system-prompt`、
   `--mcp-config`、`--settings`、`--plugin-dir`、`--allowedTools`、
   `--disallowedTools`、`--resume`、`--continue`
@@ -497,6 +505,9 @@ spinner、宽字符和 redraw 都可能让捕获文本丢字。Claude Code 的 s
 - 单次 JSON 结果输出；
 - 核心 `stream-json` event shape；
 - 通过交互式 Claude Code session 使用工具；
+- headless 运行会自动确认 Claude Code 的标准 workspace trust 提示，以匹配
+  `claude -p` 的非交互行为；`--safe-mode` 会单独转发给 Claude Code；
+  可用 `--no-auto-trust` 禁用 wrapper 自动确认；只在你信任的目录中使用；
 - Python SDK：`query(...)` 和 `ClaudePClient(...).run(...)`；
 - 通过 `uv tool install claude-p` 或 `python -m pip install claude-p` 安装后提供
   全局命令 `claude-p`。

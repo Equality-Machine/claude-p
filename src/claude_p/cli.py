@@ -145,24 +145,60 @@ def recover_prompt_from_variadic_args(args: argparse.Namespace) -> None:
 
 def normalize_answer(text: str) -> str:
     text = clean_terminal(text)
-    text = SPINNER_RE.sub("", text)
-    # Drop common TUI chrome if it leaked into the block.
-    text = re.split(r"\n?────────────────", text, maxsplit=1)[0]
-    return text.strip()
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        compact = compact_for_detection(stripped)
+        if not stripped:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if set(stripped) <= {"─"}:
+            continue
+        if stripped == "❯":
+            continue
+        if "esctointerrupt" in compact and (
+            "dontaskon" in compact or "planmodeon" in compact or "shift" in compact
+        ):
+            continue
+        if stripped[0] in "✳✶✻✽✢·" and ("tokens" in compact or "thinking" in compact or "effort" in compact):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def last_assistant_marker_index(clean: str) -> int:
+    marker = -1
+    for match in re.finditer(r"(?m)^[ \t]*⏺", clean):
+        marker = match.start() + match.group(0).index("⏺")
+    return marker
 
 
 def extract_assistant_snapshot(transcript: str) -> str:
     clean = clean_terminal(transcript)
-    marker = clean.rfind("⏺")
+    marker = last_assistant_marker_index(clean)
     if marker < 0:
         return ""
     after = clean[marker + len("⏺") :]
     return normalize_answer(after)
 
 
+def latest_assistant_screen(transcript: str) -> str:
+    clean = clean_terminal(transcript)
+    marker = last_assistant_marker_index(clean)
+    if marker < 0:
+        return clean
+    return clean[marker:]
+
+
 def classify_failure(transcript: str, assistant_text: str, timed_out: bool) -> str | None:
     interactive_block = classify_interactive_block(f"{transcript}\n{assistant_text}")
     if interactive_block:
+        live_block = classify_interactive_block(latest_assistant_screen(transcript), live_screen=True)
+        if assistant_text and interactive_block == "tool_approval_blocked":
+            return None
+        if assistant_text and interactive_block in {"workspace_trust_blocked", "tool_approval_blocked"} and not live_block:
+            return None
         return interactive_block
     if assistant_text:
         return None
@@ -184,22 +220,135 @@ def timeout_expired(start: float, timeout_sec: float, now: float | None = None) 
     return current - start >= timeout_sec
 
 
-def classify_interactive_block(text: str) -> str | None:
+def classify_interactive_block(text: str, *, live_screen: bool = False) -> str | None:
     low = clean_terminal(text).lower()
     compact = compact_for_detection(text)
     if "failed to authenticate" in low or "api error: 403" in low or "pleaserunlogin" in compact:
         return "auth_blocked"
     if "you've hit your limit" in low or "you have hit your limit" in low or "hit your limit" in low:
         return "rate_limit"
-    if (
-        ("do you trust" in low and "folder" in low)
-        or "workspacetrust" in compact
-        or ("quicksafetycheck" in compact and ("itrustthisfolder" in compact or "accessingworkspace" in compact))
-    ):
-        return "workspace_trust_blocked"
-    if "permission" in low and ("allow" in low or "deny" in low):
+    tool_blocked = (
+        tool_approval_prompt_visible(text)
+        if live_screen
+        else ("permission" in low and ("allow" in low or "deny" in low))
+    )
+    if tool_blocked:
         return "tool_approval_blocked"
+    if live_screen:
+        workspace_blocked = workspace_trust_confirmation_visible(text) or (
+            "do you trust" in low and "folder" in low and ("enter" in low or "confirm" in low)
+        )
+    else:
+        workspace_blocked = (
+            workspace_trust_prompt_visible(text)
+            or ("do you trust" in low and "folder" in low)
+            or "workspacetrust" in compact
+        )
+    if workspace_blocked:
+        return "workspace_trust_blocked"
     return None
+
+
+def tool_approval_prompt_visible(text: str) -> bool:
+    clean = clean_terminal(text)
+    lines = clean.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.lstrip(" │┃").lower()
+        if not (
+            stripped.startswith("permission request")
+            or stripped.startswith("permission prompt")
+            or stripped.startswith("do you want to allow")
+        ):
+            continue
+        window = "\n".join(lines[index : index + 8])
+        compact = compact_for_detection(window)
+        low_window = window.lower()
+        has_choice = ("allow" in compact or "yes" in compact) and ("deny" in compact or "no" in compact)
+        has_confirm = "entertoconfirm" in compact or "esctocancel" in compact or "❯" in window
+        has_selection = "❯" in window or re.search(r"(?m)^\s*(?:1[.)]|yes|allow)\b", low_window)
+        if has_choice and has_confirm and has_selection:
+            return True
+    return False
+
+
+def tool_approval_text_present(text: str) -> bool:
+    compact = compact_for_detection(text)
+    for label in ("permissionrequest", "permissionprompt", "doyouwanttoallow"):
+        start = compact.find(label)
+        if start < 0:
+            continue
+        window = compact[start : start + 240]
+        has_choice = ("allow" in window or "yes" in window) and ("deny" in window or "no" in window)
+        has_confirm = "entertoconfirm" in window or "esctocancel" in window
+        if has_choice and has_confirm:
+            return True
+    return False
+
+
+def suppress_prompt_echo_block(interactive_block: str | None, prompt: str, assistant_started: bool) -> str | None:
+    if (
+        interactive_block == "tool_approval_blocked"
+        and not assistant_started
+        and tool_approval_text_present(prompt)
+    ):
+        return None
+    if (
+        interactive_block == "workspace_trust_blocked"
+        and not assistant_started
+        and workspace_trust_confirmation_visible(prompt)
+    ):
+        return None
+    return interactive_block
+
+
+def workspace_trust_prompt_visible(text: str) -> bool:
+    compact = compact_for_detection(text)
+    return "quicksafetycheck" in compact and (
+        "yesitrustthisfolder" in compact or "accessingworkspace" in compact
+    )
+
+
+def workspace_trust_confirmation_visible(text: str) -> bool:
+    clean = clean_terminal(text)
+    lines = clean.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.lstrip(" │┃").lower().replace(" ", "")
+        if not stripped.startswith("accessingworkspace"):
+            continue
+        window = "\n".join(lines[index : index + 12])
+        clean_compact = re.sub(r"\s+", "", clean_terminal(window).lower())
+        compact = compact_for_detection(window)
+        if (
+            "quicksafetycheck" in compact
+            and "entertoconfirm" in compact
+            and ("securityguide" in compact or "noexit" in compact)
+            and (
+                "❯1.yes,itrustthisfolder" in clean_compact
+                or "❯1.yesitrustthisfolder" in clean_compact
+                or "❯yes,itrustthisfolder" in clean_compact
+                or "❯yesitrustthisfolder" in clean_compact
+            )
+        ):
+            return True
+    return False
+
+
+def maybe_accept_workspace_trust_prompt(
+    master_fd: int,
+    transcript: str,
+    already_accepted: bool,
+    assistant_started: bool = False,
+    prompt: str = "",
+) -> bool:
+    if already_accepted or assistant_started or not workspace_trust_confirmation_visible(transcript):
+        return False
+    if workspace_trust_confirmation_visible(prompt):
+        return False
+    try:
+        os.write(master_fd, b"\r")
+    except OSError:
+        return False
+    return True
 
 
 def build_usage(output_text: str) -> dict:
@@ -357,6 +506,7 @@ def run_tui(args: argparse.Namespace, stream_json: bool) -> tuple[str, str, int 
     append_optional_value(cmd, "--remote-control", args.remote_control)
     append_value(cmd, "--remote-control-session-name-prefix", args.remote_control_session_name_prefix)
     append_optional_value(cmd, "--resume", args.resume)
+    append_flag(cmd, args.safe_mode, "--safe-mode")
     append_value(cmd, "--setting-sources", args.setting_sources)
     append_value(cmd, "--settings", args.settings)
     append_flag(cmd, args.strict_mcp_config, "--strict-mcp-config")
@@ -382,6 +532,7 @@ def run_tui(args: argparse.Namespace, stream_json: bool) -> tuple[str, str, int 
     last_output = time.time()
     last_snapshot = ""
     last_jsonl_poll = 0.0
+    workspace_trust_accepted = False
     timed_out = True
 
     try:
@@ -433,7 +584,25 @@ def run_tui(args: argparse.Namespace, stream_json: bool) -> tuple[str, str, int 
                     last_snapshot = snapshot
 
             transcript = raw.decode("utf-8", "replace")
-            if classify_interactive_block(transcript):
+            if not args.no_auto_trust and maybe_accept_workspace_trust_prompt(
+                master,
+                transcript,
+                workspace_trust_accepted,
+                assistant_started=bool(last_snapshot),
+                prompt=args.prompt,
+            ):
+                workspace_trust_accepted = True
+                continue
+
+            live_screen = latest_assistant_screen(transcript) if last_snapshot else transcript
+            interactive_block = suppress_prompt_echo_block(
+                classify_interactive_block(live_screen, live_screen=True),
+                args.prompt,
+                assistant_started=bool(last_snapshot),
+            )
+            if interactive_block == "tool_approval_blocked" and last_snapshot:
+                interactive_block = None
+            if interactive_block and not (interactive_block == "workspace_trust_blocked" and workspace_trust_accepted):
                 timed_out = False
                 break
 
@@ -451,7 +620,10 @@ def run_tui(args: argparse.Namespace, stream_json: bool) -> tuple[str, str, int 
 
             if last_snapshot and time.time() - last_output >= args.quiet_after_sec:
                 persisted = read_persisted_assistant(args.session_id)
-                if not persisted or persisted.get("terminal"):
+                if persisted and persisted.get("terminal"):
+                    timed_out = False
+                    break
+                if time.time() - last_output >= max(args.quiet_after_sec * 4, 15):
                     timed_out = False
                     break
             if proc.poll() is not None:
@@ -572,6 +744,7 @@ def main() -> int:
     parser.add_argument("--remote-control-session-name-prefix")
     parser.add_argument("--replay-user-messages", action="store_true")
     parser.add_argument("-r", "--resume", nargs="?", const="")
+    parser.add_argument("--safe-mode", action="store_true")
     parser.add_argument("--setting-sources")
     parser.add_argument("--settings")
     parser.add_argument("--strict-mcp-config", action="store_true")
@@ -591,6 +764,11 @@ def main() -> int:
     parser.add_argument("--session-id", default=str(uuid.uuid4()))
     parser.add_argument("--term", default="xterm-256color")
     parser.add_argument("--raw-log")
+    parser.add_argument(
+        "--no-auto-trust",
+        action="store_true",
+        help="Do not auto-confirm Claude Code's workspace trust prompt.",
+    )
     parser.add_argument(
         "--preserve-provider-env",
         action="store_true",
